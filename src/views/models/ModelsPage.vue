@@ -45,6 +45,7 @@ function joinDisplayList(values: string[]): string {
 const primaryModel = ref('')
 const selectedProviderId = ref('')
 const providerSearch = ref('')
+const providerSearchReadonly = ref(true)
 const showEditProviderModal = ref(false)
 const showCreateProviderModal = ref(false)
 const showSaveConfirmModal = ref(false)
@@ -1080,6 +1081,16 @@ onMounted(async () => {
   await configStore.fetchConfig()
 })
 
+function handleProviderSearchFocus() {
+  if (providerSearchReadonly.value) {
+    providerSearchReadonly.value = false
+  }
+}
+
+function handleProviderSearchBlur() {
+  providerSearchReadonly.value = true
+}
+
 function normalizeProviderId(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-')
 }
@@ -2054,12 +2065,40 @@ function handleCreateProviderClick() {
         <NGridItem class="models-workbench-item" span="1 xl:12">
           <div class="models-panel">
             <NSpace justify="space-between" align="center" :size="8" class="models-panel-toolbar">
-              <NInput
-                v-model:value="providerSearch"
-                size="small"
-                :placeholder="t('pages.models.workbench.searchPlaceholder')"
-                style="width: 100%; max-width: 340px;"
-              />
+              <form class="models-provider-search-form" autocomplete="off" @submit.prevent>
+                <input
+                  class="models-provider-search-dummy"
+                  type="text"
+                  name="models-search-username"
+                  autocomplete="username"
+                  tabindex="-1"
+                  aria-hidden="true"
+                />
+                <input
+                  class="models-provider-search-dummy"
+                  type="password"
+                  name="models-search-password"
+                  autocomplete="new-password"
+                  tabindex="-1"
+                  aria-hidden="true"
+                />
+                <input
+                  v-model="providerSearch"
+                  class="models-provider-search-input"
+                  type="text"
+                  name="models-provider-search"
+                  :placeholder="t('pages.models.workbench.searchPlaceholder')"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  inputmode="search"
+                  enterkeyhint="search"
+                  :readonly="providerSearchReadonly"
+                  @focus="handleProviderSearchFocus"
+                  @blur="handleProviderSearchBlur"
+                />
+              </form>
               <NButton size="small" type="primary" @click="handleNewProvider">
                 <template #icon><NIcon :component="AddOutline" /></template>
                 {{ t('pages.models.actions.createProvider') }}
@@ -2926,6 +2965,42 @@ function handleCreateProviderClick() {
 
 .models-panel-toolbar {
   margin-bottom: 10px;
+}
+
+.models-provider-search-form {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+}
+
+.models-provider-search-dummy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.models-provider-search-input {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0 10px;
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.models-provider-search-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.models-provider-search-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(32, 128, 240, 0.14);
 }
 
 .models-editor-header {
