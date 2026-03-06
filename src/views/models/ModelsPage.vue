@@ -29,10 +29,12 @@ import {
 } from 'naive-ui'
 import { AddOutline, CheckmarkCircleOutline, CreateOutline, RefreshOutline, SaveOutline, TrashOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { useConfigStore } from '@/stores/config'
 import type { DataTableColumns } from 'naive-ui'
 import type { ConfigPatch, ModelProviderConfig } from '@/api/types'
 
+const router = useRouter()
 const configStore = useConfigStore()
 const message = useMessage()
 const { t, locale } = useI18n()
@@ -40,6 +42,18 @@ const { t, locale } = useI18n()
 function joinDisplayList(values: string[]): string {
   const separator = locale.value === 'zh-CN' ? '、' : ', '
   return values.join(separator)
+}
+
+function setModelSetupSuccess(providerName: string, modelRef: string): void {
+  modelSetupSuccess.value = { providerName, modelRef }
+}
+
+function clearModelSetupSuccess(): void {
+  modelSetupSuccess.value = null
+}
+
+function handleGoChat(): void {
+  router.push({ name: 'Chat' })
 }
 
 const primaryModel = ref('')
@@ -52,6 +66,9 @@ const showSaveConfirmModal = ref(false)
 const confirmActionType = ref<'edit' | 'create'>('edit')
 const editActiveTab = ref<'basic' | 'models' | 'preview'>('basic')
 const createActiveTab = ref<'basic' | 'models' | 'preview'>('basic')
+const showEditAdvanced = ref(false)
+const showCreateAdvanced = ref(false)
+const modelSetupSuccess = ref<{ providerName: string; modelRef: string } | null>(null)
 
 type ModelInputType = 'text' | 'image'
 
@@ -61,6 +78,7 @@ const modelInputTypeOptions = [
 ]
 
 const DEFAULT_MODEL_INPUT_TYPES: ModelInputType[] = ['text']
+const DEFAULT_API_PROTOCOL = 'openai-responses'
 
 type QuickProviderKey = 'zhipu' | 'kimi' | 'minimax'
 
@@ -79,12 +97,12 @@ const QUICK_PROVIDER_PRESETS: Record<QuickProviderKey, QuickProviderPreset> = {
   zhipu: {
     key: 'zhipu',
     providerId: 'zai',
-    api: 'openai-completions',
-    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    api: DEFAULT_API_PROTOCOL,
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
     modelId: 'glm-5',
     modelName: 'GLM-5',
     input: ['text'],
-    docsUrl: 'https://docs.bigmodel.cn/cn/coding-plan/faq',
+    docsUrl: 'https://docs.bigmodel.cn/',
   },
   kimi: {
     key: 'kimi',
@@ -99,12 +117,12 @@ const QUICK_PROVIDER_PRESETS: Record<QuickProviderKey, QuickProviderPreset> = {
   minimax: {
     key: 'minimax',
     providerId: 'minimax',
-    api: 'openai-completions',
-    baseUrl: 'https://api.minimaxi.com/v1',
+    api: 'anthropic-messages',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
     modelId: 'MiniMax-M2.5',
     modelName: 'MiniMax-M2.5',
     input: ['text'],
-    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/text-openai-api',
+    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/text-anthropic-api',
   },
 }
 
@@ -120,18 +138,217 @@ const quickProviderSaving = reactive<Record<QuickProviderKey, boolean>>({
   minimax: false,
 })
 
-const providerForm = reactive({
+type ProviderPresetKey =
+  | 'deepseek'
+  | 'qwen'
+  | 'zhipu'
+  | 'kimi'
+  | 'minimax'
+  | 'openai'
+  | 'claude'
+  | 'gemini'
+  | 'openrouter'
+  | 'ollama'
+
+type ProviderPresetSelectValue = ProviderPresetKey | 'custom'
+type ProviderPresetTier = 'recommended' | 'powerful' | 'economy' | 'local'
+
+type AssistantModelPreset = {
+  id: string
+  name: string
+  input: ModelInputType[]
+  tier: ProviderPresetTier
+}
+
+type ProviderPreset = {
+  key: ProviderPresetKey
+  label: string
+  providerId: string
+  matchIds: string[]
+  api: string
+  baseUrl: string
+  matchBaseUrls: string[]
+  docsUrl: string
+  models: AssistantModelPreset[]
+}
+
+type ProviderEditorForm = {
+  id: string
+  api: string
+  baseUrl: string
+  apiKey: string
+  modelInputTypes: ModelInputType[]
+  modelIdsText: string
+}
+
+const PROVIDER_PRESETS: Record<ProviderPresetKey, ProviderPreset> = {
+  deepseek: {
+    key: 'deepseek',
+    label: 'DeepSeek',
+    providerId: 'deepseek',
+    matchIds: ['deepseek'],
+    api: 'anthropic-messages',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    matchBaseUrls: ['https://api.deepseek.com', 'https://api.deepseek.com/v1', 'https://api.deepseek.com/anthropic'],
+    docsUrl: 'https://api-docs.deepseek.com/guides/anthropic_api',
+    models: [
+      { id: 'deepseek-chat', name: 'DeepSeek Chat', input: ['text'], tier: 'recommended' },
+    ],
+  },
+  qwen: {
+    key: 'qwen',
+    label: 'Qwen',
+    providerId: 'qwen',
+    matchIds: ['qwen', 'qwen-portal', 'dashscope'],
+    api: DEFAULT_API_PROTOCOL,
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    matchBaseUrls: ['https://dashscope.aliyuncs.com/compatible-mode/v1'],
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope',
+    models: [
+      { id: 'qwen-plus', name: 'Qwen Plus', input: ['text'], tier: 'recommended' },
+      { id: 'qwen-max', name: 'Qwen Max', input: ['text'], tier: 'powerful' },
+      { id: 'qwen-turbo', name: 'Qwen Turbo', input: ['text'], tier: 'economy' },
+    ],
+  },
+  zhipu: {
+    key: 'zhipu',
+    label: 'GLM',
+    providerId: 'zai',
+    matchIds: ['zai', 'z-ai', 'zhipu', 'glm'],
+    api: 'openai-responses',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4/',
+    matchBaseUrls: ['https://open.bigmodel.cn/api/paas/v4'],
+    docsUrl: 'https://docs.bigmodel.cn/',
+    models: [
+      { id: 'glm-5', name: 'GLM-5', input: ['text'], tier: 'recommended' },
+      { id: 'glm-4.5-air', name: 'GLM-4.5 Air', input: ['text'], tier: 'economy' },
+    ],
+  },
+  kimi: {
+    key: 'kimi',
+    label: 'Kimi',
+    providerId: 'moonshot',
+    matchIds: ['moonshot', 'kimi'],
+    api: 'openai-completions',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    matchBaseUrls: ['https://api.moonshot.cn/v1'],
+    docsUrl: 'https://platform.moonshot.cn/docs/introduction',
+    models: [
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', input: ['text'], tier: 'recommended' },
+    ],
+  },
+  minimax: {
+    key: 'minimax',
+    label: 'MiniMax',
+    providerId: 'minimax',
+    matchIds: ['minimax'],
+    api: 'anthropic-messages',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    matchBaseUrls: ['https://api.minimaxi.com/v1', 'https://api.minimaxi.com/anthropic'],
+    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/text-anthropic-api',
+    models: [
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', input: ['text'], tier: 'recommended' },
+    ],
+  },
+  openai: {
+    key: 'openai',
+    label: 'OpenAI',
+    providerId: 'openai',
+    matchIds: ['openai'],
+    api: 'openai-responses',
+    baseUrl: 'https://api.openai.com/v1',
+    matchBaseUrls: ['https://api.openai.com/v1'],
+    docsUrl: 'https://platform.openai.com/docs/models',
+    models: [
+      { id: 'gpt-5.4', name: 'GPT-5.4', input: ['text'], tier: 'recommended' },
+      { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', input: ['text'], tier: 'powerful' },
+    ],
+  },
+  claude: {
+    key: 'claude',
+    label: 'Claude',
+    providerId: 'anthropic',
+    matchIds: ['anthropic', 'claude'],
+    api: 'anthropic-messages',
+    baseUrl: 'https://api.anthropic.com/v1',
+    matchBaseUrls: ['https://api.anthropic.com/v1'],
+    docsUrl: 'https://docs.anthropic.com/en/docs/about-claude/models/all-models',
+    models: [
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', input: ['text'], tier: 'recommended' },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', input: ['text'], tier: 'powerful' },
+      { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', input: ['text'], tier: 'powerful' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', input: ['text'], tier: 'economy' },
+    ],
+  },
+  gemini: {
+    key: 'gemini',
+    label: 'Gemini',
+    providerId: 'gemini',
+    matchIds: ['gemini', 'google-ai', 'google'],
+    api: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    matchBaseUrls: [
+      'https://generativelanguage.googleapis.com/v1beta',
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+    ],
+    docsUrl: 'https://ai.google.dev/api',
+    models: [
+      { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (Preview)', input: ['text'], tier: 'recommended' },
+      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Preview)', input: ['text'], tier: 'powerful' },
+      { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash-Lite (Preview)', input: ['text'], tier: 'economy' },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', input: ['text'], tier: 'powerful' },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', input: ['text'], tier: 'economy' },
+    ],
+  },
+  openrouter: {
+    key: 'openrouter',
+    label: 'OpenRouter',
+    providerId: 'openrouter',
+    matchIds: ['openrouter'],
+    api: 'openai-responses',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    matchBaseUrls: ['https://openrouter.ai/api/v1'],
+    docsUrl: 'https://openrouter.ai/docs/api-reference/overview',
+    models: [
+      { id: 'openai/gpt-4.1-mini', name: 'OpenAI · GPT-4.1 Mini', input: ['text'], tier: 'recommended' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', input: ['text'], tier: 'economy' },
+    ],
+  },
+  ollama: {
+    key: 'ollama',
+    label: 'Ollama',
+    providerId: 'ollama',
+    matchIds: ['ollama'],
+    api: 'openai-responses',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    matchBaseUrls: ['http://127.0.0.1:11434/v1'],
+    docsUrl: 'https://docs.ollama.com/openai',
+    models: [
+      { id: 'llama3.1:8b', name: 'Llama 3.1 8B', input: ['text'], tier: 'local' },
+      { id: 'qwen2.5:7b', name: 'Qwen 2.5 7B', input: ['text'], tier: 'local' },
+    ],
+  },
+}
+
+const providerPresetList = Object.values(PROVIDER_PRESETS)
+const CUSTOM_RELAY_PROVIDER_KEYS: ProviderPresetKey[] = ['openai', 'claude', 'gemini']
+const providerPresetSelection = ref<ProviderPresetSelectValue>('custom')
+const providerAssistantModelSelection = ref('')
+const createProviderPresetSelection = ref<ProviderPresetSelectValue>('custom')
+const createAssistantModelSelection = ref('')
+
+const providerForm = reactive<ProviderEditorForm>({
   id: '',
-  api: 'openai-completions',
+  api: DEFAULT_API_PROTOCOL,
   baseUrl: '',
   apiKey: '',
   modelInputTypes: [...DEFAULT_MODEL_INPUT_TYPES] as ModelInputType[],
   modelIdsText: '',
 })
 
-const createProviderForm = reactive({
+const createProviderForm = reactive<ProviderEditorForm>({
   id: '',
-  api: 'openai-completions',
+  api: DEFAULT_API_PROTOCOL,
   baseUrl: '',
   apiKey: '',
   modelInputTypes: [...DEFAULT_MODEL_INPUT_TYPES] as ModelInputType[],
@@ -139,10 +356,10 @@ const createProviderForm = reactive({
 })
 
 const apiOptions = [
-  { label: 'OpenAI Completions', value: 'openai-completions' },
   { label: 'OpenAI Responses', value: 'openai-responses' },
   { label: 'Anthropic Messages', value: 'anthropic-messages' },
   { label: 'Google Generative AI', value: 'google-generative-ai' },
+  { label: 'OpenAI Completions', value: 'openai-completions' },
 ]
 
 type ProviderSummary = {
@@ -654,6 +871,15 @@ const currentModelIds = computed(() => parseModelIds(providerForm.modelIdsText))
 const createCurrentModelIds = computed(() => parseModelIds(createProviderForm.modelIdsText))
 const currentModelInputTypes = computed(() => normalizeModelInputTypeSelection(providerForm.modelInputTypes))
 const createCurrentModelInputTypes = computed(() => normalizeModelInputTypeSelection(createProviderForm.modelInputTypes))
+const providerPresetOptions = computed(() => [
+  { label: t('pages.models.form.providerPresetCustom'), value: 'custom' },
+  ...providerPresetList.map((item) => ({
+    label: item.label,
+    value: item.key,
+  })),
+])
+const currentAssistantModelOptions = computed(() => buildAssistantModelOptions(providerPresetSelection.value))
+const createAssistantModelOptions = computed(() => buildAssistantModelOptions(createProviderPresetSelection.value))
 const editChangePreview = computed(() => {
   if (!editingExistingProvider.value) return null
   const providerId = currentEditingProviderId.value
@@ -1095,6 +1321,229 @@ function normalizeProviderId(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-')
 }
 
+function normalizeBaseUrlForPresetMatch(value: string): string {
+  return value.trim().replace(/\/+$/, '').toLowerCase()
+}
+
+function getProviderPreset(value: ProviderPresetSelectValue): ProviderPreset | null {
+  return value === 'custom' ? null : PROVIDER_PRESETS[value]
+}
+
+function findAssistantModelPresetMatch(
+  providerPresetKey: ProviderPresetSelectValue,
+  modelId: string
+): { preset: ProviderPreset; model: AssistantModelPreset } | null {
+  const preset = getProviderPreset(providerPresetKey)
+  if (preset) {
+    const model = preset.models.find((item) => item.id === modelId)
+    return model ? { preset, model } : null
+  }
+
+  for (const presetKey of CUSTOM_RELAY_PROVIDER_KEYS) {
+    const relayPreset = PROVIDER_PRESETS[presetKey]
+    const model = relayPreset.models.find((item) => item.id === modelId)
+    if (model) return { preset: relayPreset, model }
+  }
+
+  return null
+}
+
+function getAssistantModelPreset(
+  providerPresetKey: ProviderPresetSelectValue,
+  modelId: string
+): AssistantModelPreset | null {
+  return findAssistantModelPresetMatch(providerPresetKey, modelId)?.model || null
+}
+
+function syncProviderTransportFromPreset(
+  form: ProviderEditorForm,
+  preset: ProviderPreset,
+  options: { forceBaseUrl?: boolean } = {}
+): void {
+  form.api = preset.api
+
+  const normalizedBaseUrl = normalizeBaseUrlForPresetMatch(form.baseUrl)
+  const shouldSyncBaseUrl =
+    options.forceBaseUrl ||
+    !normalizedBaseUrl ||
+    preset.matchBaseUrls.some((candidate) => normalizeBaseUrlForPresetMatch(candidate) === normalizedBaseUrl)
+
+  if (shouldSyncBaseUrl) {
+    form.baseUrl = preset.baseUrl
+  }
+}
+
+function detectProviderPreset(providerId: string, baseUrl: string): ProviderPresetSelectValue {
+  const normalizedId = normalizeProviderIdForMatch(providerId)
+  const normalizedBaseUrl = normalizeBaseUrlForPresetMatch(baseUrl)
+
+  for (const preset of providerPresetList) {
+    const idMatched = preset.matchIds.some(
+      (candidate) => normalizeProviderIdForMatch(candidate) === normalizedId
+    )
+    const baseUrlMatched = normalizedBaseUrl
+      ? preset.matchBaseUrls.some(
+          (candidate) => normalizeBaseUrlForPresetMatch(candidate) === normalizedBaseUrl
+        )
+      : false
+
+    if (idMatched || baseUrlMatched) {
+      return preset.key
+    }
+  }
+
+  return 'custom'
+}
+
+function detectAssistantModelPreset(
+  providerPresetKey: ProviderPresetSelectValue,
+  modelIds: string[]
+): string {
+  const current = pickSingleProviderModelIds(modelIds)[0]
+  if (!current) return ''
+  return getAssistantModelPreset(providerPresetKey, current)?.id || ''
+}
+
+function providerPresetTierLabel(value: ProviderPresetTier): string {
+  switch (value) {
+    case 'powerful':
+      return t('pages.models.form.presetTierPowerful')
+    case 'economy':
+      return t('pages.models.form.presetTierEconomy')
+    case 'local':
+      return t('pages.models.form.presetTierLocal')
+    case 'recommended':
+    default:
+      return t('pages.models.form.presetTierRecommended')
+  }
+}
+
+function formatAssistantModelPresetLabel(item: AssistantModelPreset): string {
+  return `${item.name} · ${providerPresetTierLabel(item.tier)}`
+}
+
+function buildAssistantModelOptions(providerPresetKey: ProviderPresetSelectValue) {
+  if (providerPresetKey === 'custom') {
+    return CUSTOM_RELAY_PROVIDER_KEYS.flatMap((presetKey) => {
+      const relayPreset = PROVIDER_PRESETS[presetKey]
+      return relayPreset.models.map((item) => ({
+        label: `${relayPreset.label} · ${formatAssistantModelPresetLabel(item)}`,
+        value: item.id,
+      }))
+    })
+  }
+
+  const preset = getProviderPreset(providerPresetKey)
+  if (!preset) return []
+
+  return preset.models.map((item) => ({
+    label: formatAssistantModelPresetLabel(item),
+    value: item.id,
+  }))
+}
+
+function buildModelConfigItems(
+  providerPresetKey: ProviderPresetSelectValue,
+  modelIds: string[],
+  inputTypes: ModelInputType[]
+) {
+  return modelIds.map((id) => {
+    const presetModel = getAssistantModelPreset(providerPresetKey, id)
+    return {
+      id,
+      name: presetModel?.name || id,
+      input: [...inputTypes],
+    }
+  })
+}
+
+function applyAssistantModelPresetToForm(
+  form: ProviderEditorForm,
+  providerPresetKey: ProviderPresetSelectValue,
+  modelId: string
+): void {
+  const presetMatch = findAssistantModelPresetMatch(providerPresetKey, modelId)
+  if (!presetMatch) return
+
+  syncProviderTransportFromPreset(form, presetMatch.preset)
+  form.modelIdsText = presetMatch.model.id
+  form.modelInputTypes = [...presetMatch.model.input]
+}
+
+function syncEditPresetSelections(): void {
+  providerPresetSelection.value = detectProviderPreset(providerForm.id, providerForm.baseUrl)
+  providerAssistantModelSelection.value = detectAssistantModelPreset(
+    providerPresetSelection.value,
+    parseModelIds(providerForm.modelIdsText)
+  )
+}
+
+function handleCreateProviderPresetChange(value: ProviderPresetSelectValue): void {
+  createProviderPresetSelection.value = value
+  if (value === 'custom') {
+    createAssistantModelSelection.value = detectAssistantModelPreset(
+      'custom',
+      parseModelIds(createProviderForm.modelIdsText)
+    )
+    return
+  }
+
+  const preset = getProviderPreset(value)
+  if (!preset) return
+
+  createProviderForm.id = preset.providerId
+  createProviderForm.api = preset.api
+  createProviderForm.baseUrl = preset.baseUrl
+  const firstModel = preset.models[0]
+  createAssistantModelSelection.value = firstModel?.id || ''
+  if (firstModel) {
+    applyAssistantModelPresetToForm(createProviderForm, value, firstModel.id)
+  }
+}
+
+function handleCreateAssistantModelPresetChange(value: string | null): void {
+  createAssistantModelSelection.value = value || ''
+  if (!value) return
+  applyAssistantModelPresetToForm(createProviderForm, createProviderPresetSelection.value, value)
+}
+
+function handleEditProviderPresetChange(value: ProviderPresetSelectValue): void {
+  providerPresetSelection.value = value
+  if (value === 'custom') {
+    providerAssistantModelSelection.value = detectAssistantModelPreset(
+      'custom',
+      parseModelIds(providerForm.modelIdsText)
+    )
+    return
+  }
+
+  const preset = getProviderPreset(value)
+  if (!preset) return
+
+  syncProviderTransportFromPreset(providerForm, preset, { forceBaseUrl: true })
+  const currentModelId = pickSingleProviderModelIds(parseModelIds(providerForm.modelIdsText))[0]
+  const matchedModelId = currentModelId
+    ? detectAssistantModelPreset(value, [currentModelId])
+    : ''
+
+  if (matchedModelId) {
+    providerAssistantModelSelection.value = matchedModelId
+    return
+  }
+
+  const firstModel = preset.models[0]
+  providerAssistantModelSelection.value = firstModel?.id || ''
+  if (firstModel) {
+    applyAssistantModelPresetToForm(providerForm, value, firstModel.id)
+  }
+}
+
+function handleEditAssistantModelPresetChange(value: string | null): void {
+  providerAssistantModelSelection.value = value || ''
+  if (!value) return
+  applyAssistantModelPresetToForm(providerForm, providerPresetSelection.value, value)
+}
+
 function parseModelIds(input: string): string[] {
   const values = input
     .split(/\n|,|;/g)
@@ -1131,10 +1580,18 @@ function normalizeSingleModelInput(value: string): string {
 
 function updateProviderSingleModelText(value: string): void {
   providerForm.modelIdsText = normalizeSingleModelInput(value)
+  providerAssistantModelSelection.value = detectAssistantModelPreset(
+    providerPresetSelection.value,
+    parseModelIds(providerForm.modelIdsText)
+  )
 }
 
 function updateCreateSingleModelText(value: string): void {
   createProviderForm.modelIdsText = normalizeSingleModelInput(value)
+  createAssistantModelSelection.value = detectAssistantModelPreset(
+    createProviderPresetSelection.value,
+    parseModelIds(createProviderForm.modelIdsText)
+  )
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1612,37 +2069,43 @@ function dedupeConfigPatchesByPath(patches: ConfigPatch[]): ConfigPatch[] {
 
 function resetEditorForm() {
   providerForm.id = ''
-  providerForm.api = 'openai-completions'
+  providerForm.api = DEFAULT_API_PROTOCOL
   providerForm.baseUrl = ''
   providerForm.apiKey = ''
   providerForm.modelInputTypes = [...DEFAULT_MODEL_INPUT_TYPES]
   providerForm.modelIdsText = ''
+  providerPresetSelection.value = 'custom'
+  providerAssistantModelSelection.value = ''
 }
 
 function resetCreateProviderForm() {
   createProviderForm.id = ''
-  createProviderForm.api = 'openai-completions'
+  createProviderForm.api = DEFAULT_API_PROTOCOL
   createProviderForm.baseUrl = ''
   createProviderForm.apiKey = ''
   createProviderForm.modelInputTypes = [...DEFAULT_MODEL_INPUT_TYPES]
   createProviderForm.modelIdsText = ''
+  createProviderPresetSelection.value = 'custom'
+  createAssistantModelSelection.value = ''
 }
 
 function loadProviderForm(providerId: string) {
   const provider = providerMap.value[providerId]
 
   providerForm.id = providerId
-  providerForm.api = readProviderText(provider, ['api', 'protocol', 'format']) || 'openai-completions'
+  providerForm.api = readProviderText(provider, ['api', 'protocol', 'format']) || DEFAULT_API_PROTOCOL
   providerForm.baseUrl = readProviderText(provider, ['baseUrl', 'baseURL', 'base_url', 'url', 'endpoint']) || ''
   providerForm.modelInputTypes = readProviderModelInputTypes(provider)
   // 不回显线上 Key，避免在 UI 里泄露；编辑时可重新输入覆盖
   providerForm.apiKey = ''
   providerForm.modelIdsText = pickSingleProviderModelIds(readProviderModelIds(provider)).join('\n')
+  syncEditPresetSelections()
 }
 
 function handleNewProvider() {
   resetCreateProviderForm()
   createActiveTab.value = 'basic'
+  showCreateAdvanced.value = false
   showCreateProviderModal.value = true
 }
 
@@ -1654,12 +2117,14 @@ function openSaveConfirm(action: 'edit' | 'create') {
 function handleLoadProvider(providerId: string) {
   selectedProviderId.value = providerId
   editActiveTab.value = 'basic'
+  showEditAdvanced.value = false
   showEditProviderModal.value = true
 }
 
 function handleCloseEditProviderModal() {
   showEditProviderModal.value = false
   editActiveTab.value = 'basic'
+  showEditAdvanced.value = false
 }
 
 async function savePrimaryModel(targetInput: string): Promise<void> {
@@ -1801,7 +2266,7 @@ async function handleSaveProvider(confirmed = false) {
   const providerBasePath = `models.providers.${providerId}`
   const shouldMigrateLegacyProviderPath = providerPrefix === 'models'
 
-  const modelsValue = finalModelIds.map((id) => ({ id, name: id, input: [...inputTypes] }))
+  const modelsValue = buildModelConfigItems(providerPresetSelection.value, finalModelIds, inputTypes)
   const patches: ConfigPatch[] = [
     { path: 'models.mode', value: 'merge' },
     { path: `${providerBasePath}.api`, value: providerForm.api },
@@ -1845,6 +2310,7 @@ async function handleSaveProvider(confirmed = false) {
     selectedProviderId.value = providerId
     providerForm.id = providerId
     providerForm.apiKey = ''
+    setModelSetupSuccess(providerId, finalModelIds[0] ? `${providerId}/${finalModelIds[0]}` : providerId)
     message.success(shouldPatchApiKey
       ? t('pages.models.messages.providerSaved')
       : t('pages.models.messages.providerSavedKeepKey'))
@@ -1896,7 +2362,7 @@ async function handleCreateProvider(confirmed = false) {
     { path: `models.providers.${providerId}.apiKey`, value: apiKey },
     {
       path: `models.providers.${providerId}.models`,
-      value: modelIds.map((id) => ({ id, name: id, input: [...inputTypes] })),
+      value: buildModelConfigItems(createProviderPresetSelection.value, modelIds, inputTypes),
     },
   ]
 
@@ -1926,6 +2392,7 @@ async function handleCreateProvider(confirmed = false) {
     showCreateProviderModal.value = false
     selectedProviderId.value = providerId
     loadProviderForm(providerId)
+    setModelSetupSuccess(providerId, modelIds[0] ? `${providerId}/${modelIds[0]}` : providerId)
     message.success(t('pages.models.messages.providerCreated'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('pages.models.messages.createFailed'))
@@ -1988,6 +2455,7 @@ async function handleQuickProviderSetup(key: QuickProviderKey) {
     quickProviderApiKeys[key] = ''
     selectedProviderId.value = providerId
     loadProviderForm(providerId)
+    setModelSetupSuccess(t(`pages.models.quick.providers.${key}.name`), `${providerId}/${preset.modelId}`)
     message.success(t('pages.models.quick.messages.saved', {
       provider: t(`pages.models.quick.providers.${key}.name`)
     }))
@@ -2055,6 +2523,91 @@ function handleCreateProviderClick() {
         </div>
       </div>
 
+    </NCard>
+
+    <NAlert
+      v-if="modelSetupSuccess"
+      type="success"
+      :bordered="false"
+      class="models-success-alert"
+    >
+      <div class="models-success-alert__content">
+        <div>
+          <div class="models-success-alert__title">{{ t('pages.models.success.title') }}</div>
+          <div class="models-success-alert__desc">
+            {{ t('pages.models.success.description', modelSetupSuccess) }}
+          </div>
+        </div>
+        <NSpace :size="8" wrap>
+          <NButton size="small" type="primary" @click="handleGoChat">{{ t('pages.models.success.goChat') }}</NButton>
+          <NButton size="small" secondary @click="clearModelSetupSuccess">{{ t('common.close') }}</NButton>
+        </NSpace>
+      </div>
+    </NAlert>
+
+    <NCard :title="t('pages.models.quick.title')" class="models-quick-card">
+      <NAlert type="info" :bordered="false" style="margin-bottom: 12px;">
+        {{ t('pages.models.quick.hint') }}
+      </NAlert>
+      <div class="models-quick-grid">
+        <div
+          v-for="item in quickProviderList"
+          :key="`quick-provider-${item.key}`"
+          class="models-quick-item"
+        >
+          <div class="models-quick-item-header">
+            <NText strong>{{ t(`pages.models.quick.providers.${item.key}.name`) }}</NText>
+            <NSpace :size="6" align="center">
+              <NTag v-if="quickProviderConfiguredMap[item.key]" size="small" type="primary" :bordered="false">
+                {{ t('pages.models.quick.configuredTag') }}
+              </NTag>
+              <NTag size="small" type="success" :bordered="false">
+                {{ t('pages.models.quick.latestTag') }}
+              </NTag>
+            </NSpace>
+          </div>
+          <NSpace vertical :size="6">
+            <NText depth="3" class="models-quick-meta">
+              {{ t('pages.models.quick.providerId') }}：<code>{{ item.providerId }}</code>
+            </NText>
+            <NText depth="3" class="models-quick-meta">
+              {{ t('pages.models.quick.defaultModel') }}：<code>{{ item.modelId }}</code>
+            </NText>
+            <NText depth="3" class="models-quick-meta">
+              {{ t('pages.models.quick.endpoint') }}：<code>{{ item.baseUrl }}</code>
+            </NText>
+            <NText depth="3" class="models-quick-outcome">
+              {{ t('pages.models.quick.setupOutcome') }}
+            </NText>
+            <a
+              class="models-quick-doc-link"
+              :href="item.docsUrl"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {{ t('pages.models.quick.docs') }}
+            </a>
+          </NSpace>
+          <NSpace vertical :size="8" style="margin-top: 10px;">
+            <NInput
+              v-model:value="quickProviderApiKeys[item.key]"
+              type="password"
+              show-password-on="click"
+              :placeholder="t('pages.models.quick.keyPlaceholder')"
+            />
+            <NButton
+              type="primary"
+              :loading="quickProviderSaving[item.key]"
+              :disabled="quickProviderSaving[item.key]"
+              @click="quickProviderConfiguredMap[item.key] ? handleGoChat() : handleQuickProviderSetup(item.key)"
+            >
+              {{ quickProviderConfiguredMap[item.key]
+                ? t('pages.models.success.goChat')
+                : t('pages.models.quick.action') }}
+            </NButton>
+          </NSpace>
+        </div>
+      </div>
     </NCard>
 
     <NCard :title="t('pages.models.workbench.title')" class="models-workbench-card">
@@ -2131,68 +2684,6 @@ function handleCreateProviderClick() {
       </NGrid>
     </NCard>
 
-    <NCard :title="t('pages.models.quick.title')" class="models-quick-card">
-      <NAlert type="info" :bordered="false" style="margin-bottom: 12px;">
-        {{ t('pages.models.quick.hint') }}
-      </NAlert>
-      <div class="models-quick-grid">
-        <div
-          v-for="item in quickProviderList"
-          :key="`quick-provider-${item.key}`"
-          class="models-quick-item"
-        >
-          <div class="models-quick-item-header">
-            <NText strong>{{ t(`pages.models.quick.providers.${item.key}.name`) }}</NText>
-            <NSpace :size="6" align="center">
-              <NTag v-if="quickProviderConfiguredMap[item.key]" size="small" type="primary" :bordered="false">
-                {{ t('pages.models.quick.configuredTag') }}
-              </NTag>
-              <NTag size="small" type="success" :bordered="false">
-                {{ t('pages.models.quick.latestTag') }}
-              </NTag>
-            </NSpace>
-          </div>
-          <NSpace vertical :size="6">
-            <NText depth="3" class="models-quick-meta">
-              {{ t('pages.models.quick.providerId') }}：<code>{{ item.providerId }}</code>
-            </NText>
-            <NText depth="3" class="models-quick-meta">
-              {{ t('pages.models.quick.defaultModel') }}：<code>{{ item.modelId }}</code>
-            </NText>
-            <NText depth="3" class="models-quick-meta">
-              {{ t('pages.models.quick.endpoint') }}：<code>{{ item.baseUrl }}</code>
-            </NText>
-            <a
-              class="models-quick-doc-link"
-              :href="item.docsUrl"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {{ t('pages.models.quick.docs') }}
-            </a>
-          </NSpace>
-          <NSpace vertical :size="8" style="margin-top: 10px;">
-            <NInput
-              v-model:value="quickProviderApiKeys[item.key]"
-              type="password"
-              show-password-on="click"
-              :placeholder="t('pages.models.quick.keyPlaceholder')"
-            />
-            <NButton
-              type="primary"
-              :loading="quickProviderSaving[item.key]"
-              :disabled="quickProviderConfiguredMap[item.key]"
-              @click="handleQuickProviderSetup(item.key)"
-            >
-              {{ quickProviderConfiguredMap[item.key]
-                ? t('pages.models.quick.configuredTag')
-                : t('pages.models.quick.action') }}
-            </NButton>
-          </NSpace>
-        </div>
-      </div>
-    </NCard>
-
     <NModal
       v-model:show="showEditProviderModal"
       preset="card"
@@ -2211,6 +2702,19 @@ function handleCreateProviderClick() {
           <NTabs v-model:value="editActiveTab" type="line" animated>
             <NTabPane name="basic" :tab="t('pages.models.tabs.basic')">
               <NForm label-placement="left" label-width="100">
+                <NFormItem :label="t('pages.models.form.providerPreset')">
+                  <NSpace vertical :size="6" style="width: 100%;">
+                    <NSelect
+                      :value="providerPresetSelection"
+                      :options="providerPresetOptions"
+                      :placeholder="t('pages.models.form.providerPresetPlaceholder')"
+                      @update:value="handleEditProviderPresetChange"
+                    />
+                    <NText depth="3" style="font-size: 12px;">
+                      {{ t('pages.models.form.providerPresetEditHint') }}
+                    </NText>
+                  </NSpace>
+                </NFormItem>
                 <NFormItem :label="t('pages.models.form.providerId')">
                   <NInput
                     v-model:value="providerForm.id"
@@ -2252,13 +2756,19 @@ function handleCreateProviderClick() {
 
             <NTabPane name="models" :tab="t('pages.models.tabs.models')">
               <NForm label-placement="left" label-width="100">
-                <NFormItem :label="t('pages.models.form.modelInputTypes')">
-                  <NSelect
-                    v-model:value="providerForm.modelInputTypes"
-                    :options="modelInputTypeOptions"
-                    multiple
-                    :placeholder="t('pages.models.form.modelInputTypesPlaceholder')"
-                  />
+                <NFormItem v-if="currentAssistantModelOptions.length" :label="t('pages.models.form.assistantModelPreset')">
+                  <NSpace vertical :size="6" style="width: 100%;">
+                    <NSelect
+                      :value="providerAssistantModelSelection"
+                      :options="currentAssistantModelOptions"
+                      clearable
+                      :placeholder="t('pages.models.form.assistantModelPresetPlaceholder')"
+                      @update:value="handleEditAssistantModelPresetChange"
+                    />
+                    <NText depth="3" style="font-size: 12px;">
+                      {{ t('pages.models.form.assistantModelPresetHint') }}
+                    </NText>
+                  </NSpace>
                 </NFormItem>
                 <NFormItem :label="t('pages.models.form.models')">
                   <NInput
@@ -2281,6 +2791,20 @@ function handleCreateProviderClick() {
                       {{ t('pages.models.form.modelsCount', { count: currentModelIds.length }) }}
                     </NText>
                   </NSpace>
+                </NFormItem>
+                <div class="models-advanced-toggle-row">
+                  <NButton text type="primary" @click="showEditAdvanced = !showEditAdvanced">
+                    {{ showEditAdvanced ? t('pages.models.advanced.hide') : t('pages.models.advanced.show') }}
+                  </NButton>
+                  <NText depth="3" style="font-size: 12px;">{{ t('pages.models.advanced.hint') }}</NText>
+                </div>
+                <NFormItem v-if="showEditAdvanced" :label="t('pages.models.form.modelInputTypes')">
+                  <NSelect
+                    v-model:value="providerForm.modelInputTypes"
+                    :options="modelInputTypeOptions"
+                    multiple
+                    :placeholder="t('pages.models.form.modelInputTypesPlaceholder')"
+                  />
                 </NFormItem>
                 <NFormItem>
                   <NSpace justify="end" style="width: 100%;">
@@ -2472,6 +2996,19 @@ function handleCreateProviderClick() {
       <NTabs v-model:value="createActiveTab" type="line" animated>
         <NTabPane name="basic" :tab="t('pages.models.tabs.basic')">
           <NForm label-placement="left" label-width="100">
+            <NFormItem :label="t('pages.models.form.providerPreset')">
+              <NSpace vertical :size="6" style="width: 100%;">
+                <NSelect
+                  :value="createProviderPresetSelection"
+                  :options="providerPresetOptions"
+                  :placeholder="t('pages.models.form.providerPresetPlaceholder')"
+                  @update:value="handleCreateProviderPresetChange"
+                />
+                <NText depth="3" style="font-size: 12px;">
+                  {{ t('pages.models.form.providerPresetHint') }}
+                </NText>
+              </NSpace>
+            </NFormItem>
             <NFormItem :label="t('pages.models.form.providerId')">
               <NInput v-model:value="createProviderForm.id" :placeholder="t('pages.models.form.providerIdPlaceholder')" />
             </NFormItem>
@@ -2499,13 +3036,19 @@ function handleCreateProviderClick() {
 
         <NTabPane name="models" :tab="t('pages.models.tabs.models')">
           <NForm label-placement="left" label-width="100">
-            <NFormItem :label="t('pages.models.form.modelInputTypes')">
-              <NSelect
-                v-model:value="createProviderForm.modelInputTypes"
-                :options="modelInputTypeOptions"
-                multiple
-                :placeholder="t('pages.models.form.modelInputTypesPlaceholder')"
-              />
+            <NFormItem v-if="createAssistantModelOptions.length" :label="t('pages.models.form.assistantModelPreset')">
+              <NSpace vertical :size="6" style="width: 100%;">
+                <NSelect
+                  :value="createAssistantModelSelection"
+                  :options="createAssistantModelOptions"
+                  clearable
+                  :placeholder="t('pages.models.form.assistantModelPresetPlaceholder')"
+                  @update:value="handleCreateAssistantModelPresetChange"
+                />
+                <NText depth="3" style="font-size: 12px;">
+                  {{ t('pages.models.form.assistantModelPresetHint') }}
+                </NText>
+              </NSpace>
             </NFormItem>
             <NFormItem :label="t('pages.models.form.models')">
               <NInput
@@ -2528,6 +3071,20 @@ function handleCreateProviderClick() {
                   {{ t('pages.models.form.modelsCount', { count: createCurrentModelIds.length }) }}
                 </NText>
               </NSpace>
+            </NFormItem>
+            <div class="models-advanced-toggle-row">
+              <NButton text type="primary" @click="showCreateAdvanced = !showCreateAdvanced">
+                {{ showCreateAdvanced ? t('pages.models.advanced.hide') : t('pages.models.advanced.show') }}
+              </NButton>
+              <NText depth="3" style="font-size: 12px;">{{ t('pages.models.advanced.hint') }}</NText>
+            </div>
+            <NFormItem v-if="showCreateAdvanced" :label="t('pages.models.form.modelInputTypes')">
+              <NSelect
+                v-model:value="createProviderForm.modelInputTypes"
+                :options="modelInputTypeOptions"
+                multiple
+                :placeholder="t('pages.models.form.modelInputTypesPlaceholder')"
+              />
             </NFormItem>
             <NFormItem>
               <NSpace justify="space-between" style="width: 100%;">
@@ -3063,6 +3620,42 @@ function handleCreateProviderClick() {
   border-radius: 8px;
   padding: 8px 10px;
   background: var(--bg-primary);
+}
+
+.models-success-alert {
+  border-radius: 14px;
+}
+
+.models-success-alert__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.models-success-alert__title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.models-success-alert__desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.models-advanced-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.models-quick-outcome {
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .models-empty {

@@ -56,7 +56,9 @@ interface ChannelCard extends ChinaChannelMeta {
   pluginStatusKnown: boolean
   pluginInstalled: boolean
   configured: boolean
-  visibleSecretKeys: string[]
+  channelSecretKeys: string[]
+  accountFieldKeys: string[]
+  accountSecretKeys: string[]
 }
 
 const CHINA_CHANNELS: ChinaChannelMeta[] = [
@@ -93,6 +95,13 @@ const CHINA_CHANNELS: ChinaChannelMeta[] = [
 const channelStore = useChannelManagementStore()
 const message = useMessage()
 const { t } = useI18n()
+
+const DEFAULT_ACCOUNT_ID = 'default'
+
+function shouldManageDefaultAccount(channelType: ChinaChannelMeta['key']): boolean {
+  const template = resolveChannelTemplate(channelType)
+  return !!template && (template.accountFields.length > 0 || template.accountSecretFields.length > 0)
+}
 
 const expandedChannelKeys = ref<string[]>([])
 const installLoading = ref<Record<string, boolean>>({})
@@ -149,6 +158,11 @@ function readChannelConfig(channelKey: string): Record<string, unknown> {
   return asRecord(channelStore.channelsDraft[channelKey])
 }
 
+function readAccountConfig(channelKey: string, accountId = DEFAULT_ACCOUNT_ID): Record<string, unknown> {
+  const channelConfig = readChannelConfig(channelKey)
+  return asRecord(asRecord(channelConfig.accounts)[accountId])
+}
+
 const channelCards = computed(() => {
   const installStatusKnown = channelStore.pluginRpcSupported || channelStore.runtimeChannels.length > 0
 
@@ -163,11 +177,15 @@ const channelCards = computed(() => {
     const configured = !!channelStore.channelsDraft[channelKey]
     const channelConfig = configured ? readChannelConfig(channelKey) : {}
     const template = resolveChannelTemplate(meta.key)
-    const detectedSecretKeys = collectSecretFieldKeys(channelConfig, template?.channelSecretFields || [])
-    const visibleSecretKeys =
+    const channelSecretKeys =
       meta.key === 'qqbot' || meta.key === 'dingtalk'
         ? ['clientSecret']
-        : detectedSecretKeys
+        : collectSecretFieldKeys(channelConfig, template?.channelSecretFields || [])
+    const accountConfig = readAccountConfig(channelKey)
+    const accountFieldKeys = template?.accountFields || []
+    const accountSecretKeys = meta.key === 'feishu'
+      ? []
+      : collectSecretFieldKeys(accountConfig, template?.accountSecretFields || [])
 
     return {
       ...meta,
@@ -177,7 +195,9 @@ const channelCards = computed(() => {
       pluginStatusKnown: installStatusKnown,
       pluginInstalled,
       configured,
-      visibleSecretKeys,
+      channelSecretKeys,
+      accountFieldKeys,
+      accountSecretKeys,
     }
   })
 })
@@ -215,20 +235,160 @@ function updateChannelMarkdownSupport(channelKey: string, value: boolean): void 
   channelStore.setChannelField(channelKey, 'markdownSupport', value)
 }
 
+function managedAppIdValue(channelKey: string, channelType: ChinaChannelMeta['key']): string {
+  if (channelType !== 'feishu') {
+    return channelAppId(channelKey)
+  }
+
+  return channelAppId(channelKey) || accountFieldValue(channelKey, 'appId')
+}
+
+function updateManagedAppId(channelKey: string, channelType: ChinaChannelMeta['key'], value: string): void {
+  const nextValue = shouldKeepStringValue(value)
+
+  channelStore.setChannelField(channelKey, 'appId', nextValue)
+  if (channelType === 'feishu') {
+    channelStore.setAccountField(channelKey, DEFAULT_ACCOUNT_ID, 'appId', undefined)
+  }
+}
+
+function managedAppIdPlaceholder(channelType: ChinaChannelMeta['key']): string {
+  return channelType === 'qqbot'
+    ? t('pages.channels.placeholders.qqAppId')
+    : t('pages.channels.placeholders.appId')
+}
+
+function accountEnabled(channelKey: string, accountId = DEFAULT_ACCOUNT_ID): boolean {
+  const config = readAccountConfig(channelKey, accountId)
+  return typeof config.enabled === 'boolean' ? config.enabled : true
+}
+
+function updateAccountEnabled(channelKey: string, value: boolean, accountId = DEFAULT_ACCOUNT_ID): void {
+  channelStore.setAccountField(channelKey, accountId, 'enabled', value)
+}
+
+function accountFieldValue(channelKey: string, field: string, accountId = DEFAULT_ACCOUNT_ID): string {
+  return readString(readAccountConfig(channelKey, accountId)[field])
+}
+
+function updateAccountFieldValue(channelKey: string, field: string, value: string, accountId = DEFAULT_ACCOUNT_ID): void {
+  channelStore.setAccountField(channelKey, accountId, field, shouldKeepStringValue(value))
+}
+
+function accountSecretValue(channelKey: string, field: string, accountId = DEFAULT_ACCOUNT_ID): string {
+  return maskSecretValue(readAccountConfig(channelKey, accountId)[field])
+}
+
+function accountSecretPreviewValue(channelKey: string, field: string, accountId = DEFAULT_ACCOUNT_ID): string {
+  if (hasAccountSecretUpdate(channelKey, field, accountId)) {
+    return t('pages.channels.pendingUpdate')
+  }
+
+  const masked = accountSecretValue(channelKey, field, accountId)
+  if (masked !== t('pages.channels.notConfigured')) {
+    return masked
+  }
+
+  const channelTemplate = resolveChannelTemplate(channelKey)
+  if (channelTemplate?.key === 'feishu') {
+    return t('pages.channels.secretWriteOnly')
+  }
+
+  return masked
+}
+
+function readAccountSecretInput(channelKey: string, field: string, accountId = DEFAULT_ACCOUNT_ID): string {
+  return channelStore.getSecretUpdate({ channelKey, accountId, field })
+}
+
+function updateAccountSecretInput(channelKey: string, field: string, value: string, accountId = DEFAULT_ACCOUNT_ID): void {
+  channelStore.setSecretUpdate({ channelKey, accountId, field }, value)
+}
+
+function hasAccountSecretUpdate(channelKey: string, field: string, accountId = DEFAULT_ACCOUNT_ID): boolean {
+  return channelStore.hasSecretUpdate({ channelKey, accountId, field })
+}
+
+function ensureDefaultAccount(channelKey: string): void {
+  channelStore.upsertAccount(channelKey, DEFAULT_ACCOUNT_ID)
+  channelStore.setAccountField(channelKey, DEFAULT_ACCOUNT_ID, 'enabled', true)
+}
+
+function channelFieldLabel(field: string): string {
+  const labelMap: Record<string, string> = {
+    appId: t('pages.channels.labels.appId'),
+    clientId: t('pages.channels.labels.clientId'),
+    markdownSupport: t('pages.channels.labels.markdownSupport'),
+    appSecret: t('pages.channels.labels.appSecret'),
+    corpId: t('pages.channels.labels.corpId'),
+    agentId: t('pages.channels.labels.agentId'),
+    verificationToken: t('pages.channels.labels.verificationToken'),
+    encryptKey: t('pages.channels.labels.encryptKey'),
+    secret: t('pages.channels.labels.secret'),
+    token: t('pages.channels.labels.token'),
+    encodingAesKey: t('pages.channels.labels.encodingAesKey'),
+    clientSecret: t('pages.channels.labels.clientSecret'),
+    corpSecret: t('pages.channels.labels.secret'),
+  }
+  return labelMap[field] || field
+}
+
+function channelFieldPlaceholder(field: string): string {
+  const placeholderMap: Record<string, string> = {
+    appId: t('pages.channels.placeholders.appId'),
+    clientId: t('pages.channels.placeholders.clientId'),
+    appSecret: t('pages.channels.placeholders.appSecret'),
+    corpId: t('pages.channels.placeholders.corpId'),
+    agentId: t('pages.channels.placeholders.agentId'),
+    verificationToken: t('pages.channels.placeholders.verificationToken'),
+    encryptKey: t('pages.channels.placeholders.encryptKey'),
+    secret: t('pages.channels.placeholders.secret'),
+    token: t('pages.channels.placeholders.token'),
+    encodingAesKey: t('pages.channels.placeholders.encodingAesKey'),
+    clientSecret: t('pages.channels.placeholders.secret'),
+    corpSecret: t('pages.channels.placeholders.secret'),
+  }
+  return placeholderMap[field] || ''
+}
+
 function channelSecretValue(channelKey: string, field: string): string {
   const row = readChannelConfig(channelKey)
-  return maskSecretValue(row[field])
+  const masked = maskSecretValue(row[field])
+
+  if (resolveChannelTemplate(channelKey)?.key === 'feishu' && field === 'appSecret') {
+    return masked !== t('pages.channels.notConfigured')
+      ? masked
+      : accountSecretValue(channelKey, field)
+  }
+
+  return masked
 }
 
 function readSecretInput(channelKey: string, field: string): string {
+  if (resolveChannelTemplate(channelKey)?.key === 'feishu' && field === 'appSecret') {
+    return channelStore.getSecretUpdate({ channelKey, field })
+      || channelStore.getSecretUpdate({ channelKey, accountId: DEFAULT_ACCOUNT_ID, field })
+  }
+
   return channelStore.getSecretUpdate({ channelKey, field })
 }
 
 function updateSecretInput(channelKey: string, field: string, value: string): void {
   channelStore.setSecretUpdate({ channelKey, field }, value)
+  if (resolveChannelTemplate(channelKey)?.key === 'feishu' && field === 'appSecret') {
+    channelStore.setSecretUpdate({ channelKey, accountId: DEFAULT_ACCOUNT_ID, field }, '')
+    if (shouldKeepStringValue(value)) {
+      channelStore.setAccountField(channelKey, DEFAULT_ACCOUNT_ID, field, undefined)
+    }
+  }
 }
 
 function hasSecretUpdate(channelKey: string, field: string): boolean {
+  if (resolveChannelTemplate(channelKey)?.key === 'feishu' && field === 'appSecret') {
+    return channelStore.hasSecretUpdate({ channelKey, field })
+      || channelStore.hasSecretUpdate({ channelKey, accountId: DEFAULT_ACCOUNT_ID, field })
+  }
+
   return channelStore.hasSecretUpdate({ channelKey, field })
 }
 
@@ -251,6 +411,9 @@ async function installChannel(meta: ChannelCard): Promise<void> {
 
     channelStore.ensureDraftChannel(channelKey)
     channelStore.setChannelField(channelKey, 'enabled', true)
+    if (shouldManageDefaultAccount(meta.key)) {
+      ensureDefaultAccount(channelKey)
+    }
     if (meta.key === 'qqbot') {
       channelStore.setChannelField(channelKey, 'markdownSupport', true)
     }
@@ -462,11 +625,11 @@ onMounted(() => {
                         @update:value="(value) => updateChannelEnabled(card.channelKey, value)"
                       />
                     </NFormItem>
-                    <NFormItem v-if="card.key === 'qqbot'" :label="t('pages.channels.labels.appId')">
+                    <NFormItem v-if="card.key === 'qqbot' || card.key === 'feishu'" :label="t('pages.channels.labels.appId')">
                       <NInput
-                        :value="channelAppId(card.channelKey)"
-                        :placeholder="t('pages.channels.placeholders.qqAppId')"
-                        @update:value="(value) => updateChannelAppId(card.channelKey, value)"
+                        :value="managedAppIdValue(card.channelKey, card.key)"
+                        :placeholder="managedAppIdPlaceholder(card.key)"
+                        @update:value="(value) => updateManagedAppId(card.channelKey, card.key, value)"
                       />
                     </NFormItem>
                     <NFormItem v-if="card.key === 'dingtalk'" :label="t('pages.channels.labels.clientId')">
@@ -485,45 +648,110 @@ onMounted(() => {
                   </NForm>
                 </NCard>
 
-                <NCard v-if="card.configured" size="small" :title="t('pages.channels.credentialsTitle')" embedded>
+                <NCard
+                  v-if="card.configured && shouldManageDefaultAccount(card.key)"
+                  size="small"
+                  :title="t('pages.channels.accountConfigTitle')"
+                  embedded
+                >
+                  <NAlert type="info" :bordered="false" style="margin-bottom: 12px;">
+                    {{ t('pages.channels.accountConfigHint') }}
+                  </NAlert>
+                  <NForm label-placement="left" label-width="160" class="channel-config-form">
+                    <NFormItem :label="t('pages.channels.labels.defaultAccountEnabled')">
+                      <NSwitch
+                        :value="accountEnabled(card.channelKey)"
+                        @update:value="(value) => updateAccountEnabled(card.channelKey, value)"
+                      />
+                    </NFormItem>
+                    <NFormItem
+                      v-for="field in card.accountFieldKeys"
+                      :key="`account-field-${card.channelKey}-${field}`"
+                      :label="channelFieldLabel(field)"
+                    >
+                      <NInput
+                        :value="accountFieldValue(card.channelKey, field)"
+                        :placeholder="channelFieldPlaceholder(field)"
+                        @update:value="(value) => updateAccountFieldValue(card.channelKey, field, value)"
+                      />
+                    </NFormItem>
+
+                  </NForm>
+                </NCard>
+
+                <NCard
+                  v-if="card.configured && (card.channelSecretKeys.length > 0 || card.accountSecretKeys.length > 0)"
+                  size="small"
+                  :title="t('pages.channels.credentialsTitle')"
+                  embedded
+                >
                   <NAlert type="info" :bordered="false" style="margin-bottom: 12px;">
                     {{ t('pages.channels.credentialsHint') }}
                   </NAlert>
 
                   <NSpace
-                    v-if="card.visibleSecretKeys.length === 0"
+                    v-if="card.channelSecretKeys.length === 0 && card.accountSecretKeys.length === 0"
                     justify="center"
                     style="padding: 8px 0;"
                   >
                     <NText depth="3">{{ t('pages.channels.noSecretFields') }}</NText>
                   </NSpace>
 
-                  <NForm v-else label-placement="left" label-width="160" class="channel-secret-form">
-                    <NFormItem
-                      v-for="field in card.visibleSecretKeys"
-                      :key="`channel-secret-${card.channelKey}-${field}`"
-                      :label="field"
-                    >
-                      <NInputGroup>
-                        <NInput :value="channelSecretValue(card.channelKey, field)" disabled style="width: 180px;" />
-                        <NInput
-                          type="password"
-                          show-password-on="click"
-                          :value="readSecretInput(card.channelKey, field)"
-                          :placeholder="t('pages.channels.placeholders.secret')"
-                          @update:value="(value) => updateSecretInput(card.channelKey, field, value)"
-                        />
-                        <NTag
-                          v-if="hasSecretUpdate(card.channelKey, field)"
-                          type="warning"
-                          :bordered="false"
-                          style="align-self: center;"
-                        >
-                          {{ t('pages.channels.pendingUpdate') }}
-                        </NTag>
-                      </NInputGroup>
-                    </NFormItem>
-                  </NForm>
+                  <NSpace v-else vertical :size="12">
+                    <NForm v-if="card.channelSecretKeys.length" label-placement="left" label-width="160" class="channel-secret-form">
+                      <NFormItem
+                        v-for="field in card.channelSecretKeys"
+                        :key="`channel-secret-${card.channelKey}-${field}`"
+                        :label="channelFieldLabel(field)"
+                      >
+                        <NInputGroup>
+                          <NInput :value="channelSecretValue(card.channelKey, field)" disabled style="width: 180px;" />
+                          <NInput
+                            type="password"
+                            show-password-on="click"
+                            :value="readSecretInput(card.channelKey, field)"
+                            :placeholder="t('pages.channels.placeholders.secret')"
+                            @update:value="(value) => updateSecretInput(card.channelKey, field, value)"
+                          />
+                          <NTag
+                            v-if="hasSecretUpdate(card.channelKey, field)"
+                            type="warning"
+                            :bordered="false"
+                            style="align-self: center;"
+                          >
+                            {{ t('pages.channels.pendingUpdate') }}
+                          </NTag>
+                        </NInputGroup>
+                      </NFormItem>
+                    </NForm>
+
+                    <NForm v-if="card.accountSecretKeys.length" label-placement="left" label-width="160" class="channel-secret-form">
+                      <NFormItem
+                        v-for="field in card.accountSecretKeys"
+                        :key="`account-secret-${card.channelKey}-${field}`"
+                        :label="channelFieldLabel(field)"
+                      >
+                        <NInputGroup>
+                          <NInput :value="accountSecretPreviewValue(card.channelKey, field)" disabled style="width: 180px;" />
+                          <NInput
+                            type="password"
+                            show-password-on="click"
+                            :value="readAccountSecretInput(card.channelKey, field)"
+                            :placeholder="t('pages.channels.placeholders.secret')"
+                            @update:value="(value) => updateAccountSecretInput(card.channelKey, field, value)"
+                          />
+                          <NTag
+                            v-if="hasAccountSecretUpdate(card.channelKey, field)"
+                            type="warning"
+                            :bordered="false"
+                            style="align-self: center;"
+                          >
+                            {{ t('pages.channels.pendingUpdate') }}
+                          </NTag>
+                        </NInputGroup>
+                      </NFormItem>
+                    </NForm>
+                  </NSpace>
                 </NCard>
               </NSpace>
             </NCollapseItem>

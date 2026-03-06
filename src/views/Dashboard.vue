@@ -418,6 +418,70 @@ const topToolMax = computed(() =>
   Math.max(...topTools.value.map((item) => item.count || 0), 0)
 )
 
+const quickstartTasks = computed<{
+  key: string
+  title: string
+  description: string
+  actionLabel: string
+  routeName: 'Settings' | 'Models' | 'Chat'
+  statusLabel: string
+  statusType: 'success' | 'warning' | 'default'
+  disabled: boolean
+}[]>(() => {
+  const connected = wsStore.state === 'connected'
+  const modelsConfigured = stats.value.modelCount > 0
+  const hasSessions = stats.value.sessionCount > 0
+
+  return [
+    {
+      key: 'connection',
+      title: t('pages.dashboard.quickstart.tasks.connection.title'),
+      description: connected
+        ? t('pages.dashboard.quickstart.tasks.connection.done')
+        : t('pages.dashboard.quickstart.tasks.connection.pending'),
+      actionLabel: t('pages.dashboard.quickstart.actions.connection'),
+      routeName: 'Settings',
+      statusLabel: connected ? t('pages.dashboard.quickstart.status.done') : t('pages.dashboard.quickstart.status.next'),
+      statusType: connected ? 'success' : 'warning',
+      disabled: false,
+    },
+    {
+      key: 'models',
+      title: t('pages.dashboard.quickstart.tasks.models.title'),
+      description: modelsConfigured
+        ? t('pages.dashboard.quickstart.tasks.models.done')
+        : t('pages.dashboard.quickstart.tasks.models.pending'),
+      actionLabel: t('pages.dashboard.quickstart.actions.models'),
+      routeName: 'Models',
+      statusLabel: modelsConfigured
+        ? t('pages.dashboard.quickstart.status.done')
+        : connected
+          ? t('pages.dashboard.quickstart.status.next')
+          : t('pages.dashboard.quickstart.status.blocked'),
+      statusType: modelsConfigured ? 'success' : connected ? 'warning' : 'default',
+      disabled: !connected,
+    },
+    {
+      key: 'chat',
+      title: t('pages.dashboard.quickstart.tasks.chat.title'),
+      description: hasSessions
+        ? t('pages.dashboard.quickstart.tasks.chat.done')
+        : connected && modelsConfigured
+          ? t('pages.dashboard.quickstart.tasks.chat.pending')
+          : t('pages.dashboard.quickstart.tasks.chat.blocked'),
+      actionLabel: t('pages.dashboard.quickstart.actions.chat'),
+      routeName: 'Chat',
+      statusLabel: hasSessions
+        ? t('pages.dashboard.quickstart.status.done')
+        : connected && modelsConfigured
+          ? t('pages.dashboard.quickstart.status.next')
+          : t('pages.dashboard.quickstart.status.blocked'),
+      statusType: hasSessions ? 'success' : connected && modelsConfigured ? 'warning' : 'default',
+      disabled: !connected || !modelsConfigured,
+    },
+  ]
+})
+
 onMounted(async () => {
   applyRangePreset('7d', false)
   retryAfterFirstConnect = wsStore.state !== 'connected'
@@ -778,6 +842,28 @@ function viewModels() {
         </NAlert>
       </NCard>
 
+      <NCard :title="t('pages.dashboard.quickstart.title')" class="dashboard-card quickstart-card">
+        <template #header-extra>
+          <NText depth="3">{{ t('pages.dashboard.quickstart.subtitle') }}</NText>
+        </template>
+
+        <div class="quickstart-grid">
+          <div v-for="task in quickstartTasks" :key="task.key" class="quickstart-item">
+            <div class="quickstart-item__top">
+              <div>
+                <div class="quickstart-item__title">{{ task.title }}</div>
+                <div class="quickstart-item__desc">{{ task.description }}</div>
+              </div>
+              <NTag :type="task.statusType" round :bordered="false">{{ task.statusLabel }}</NTag>
+            </div>
+
+            <NButton secondary :disabled="task.disabled" @click="router.push({ name: task.routeName })">
+              {{ task.actionLabel }}
+            </NButton>
+          </div>
+        </div>
+      </NCard>
+
       <NGrid cols="1 s:2 m:3 l:5" responsive="screen" :x-gap="12" :y-gap="12">
         <NGridItem>
           <StatCard :title="t('pages.dashboard.stats.sessions')" :value="stats.sessionCount" :icon="ChatbubblesOutline" color="#18a058" />
@@ -1009,6 +1095,46 @@ function viewModels() {
 
 .dashboard-card {
   border-radius: var(--radius-lg);
+}
+
+.quickstart-card :deep(.n-card__content) {
+  padding-top: 8px;
+}
+
+.quickstart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quickstart-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(42, 127, 255, 0.06), rgba(24, 160, 88, 0.04));
+}
+
+.quickstart-item__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quickstart-item__title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.quickstart-item__desc {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
 .dashboard-hero {
@@ -1302,6 +1428,10 @@ function viewModels() {
 }
 
 @media (max-width: 900px) {
+  .quickstart-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-filters-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
