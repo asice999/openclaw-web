@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  openclaw-web:
+    image: ghcr.io/YOUR_GITHUB_USERNAME/openclaw-web:latest
+    container_name: openclaw-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
